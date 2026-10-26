@@ -1,73 +1,149 @@
-# Mapeamento do Sistema — Entrada, Processamento, Saída e Estado
+# Show de Boas-Vindas — Robô Humanoide (YanAPI)
 
-Análise do programa do Grau A (show de boas-vindas do robô humanoide via YanAPI).
-Sempre que um item depender de confirmação prática com o robô, está marcado como **[a confirmar]**.
+Projeto da Avaliação Grau A — disciplina de **Robótica Humanoide e Inteligência Artificial**.
 
-## Visão geral do fluxo
+> **Nota:** este README descreve a **versão atual** do código. Será atualizado após a refatoração.
 
+## Finalidade
+
+Mantém o robô humanoide UBTech (via API **YanSDK / `YanAPI`**) monitorando o ambiente com **reconhecimento facial**. Ao detectar ao menos um rosto, executa um pequeno show de boas-vindas:
+
+1. **Aceno e saudação** — movimento `wave` com fala de saudação (TTS);
+2. **Abertura** — agacha, levanta os braços e anuncia o show;
+3. **Dança hip-hop** — sequência de movimentos do catálogo do robô ao som de `hiphop.mp3`; se a música não for encontrada no robô, ele canta trechos via TTS;
+4. **Mão levantada = parada** — se alguém fizer o gesto `good` durante o show, o robô interrompe música, movimento e fala, pisca o LED vermelho e pede desculpas;
+5. Volta à pose inicial e continua monitorando (loop contínuo, com cooldown entre shows).
+
+Indicação por LED: azul piscando (monitorando) → verde (rosto detectado) → ciano piscando (dançando) → vermelho piscando (pedindo desculpas).
+
+## Estrutura
+
+Script de arquivo único (nome do arquivo principal: *a confirmar*), com constantes de configuração no topo e funções organizadas por responsabilidade:
+
+| Bloco | Funções | Papel |
+|---|---|---|
+| Conexão | `conectar()`, `checar_bateria()` | Inicializa a YanAPI e alerta bateria < 20% |
+| Percepção | `detectar_rostos()`, `contar_rostos_em()`, `mao_levantada()` | Reconhecimento facial (tipo `quantity`) e de gesto (`good`), com leitura defensiva do JSON de retorno |
+| Ação | `acenar_falando()`, `abaixar_e_levantar_bracos()`, `dancar_hiphop()`, `tocar_musica()`, `pedir_desculpas()`, `voltar_a_pose()` | Rotinas de movimento, fala, música e LED |
+| Controle | `apresentar()`, `main()` | Orquestra o show e o loop de detecção |
+| Utilidades | `com_seguranca()`, `led()` | Chamadas à API protegidas contra exceções e controle do LED |
+
+## Ambiente
+
+- **Hardware:** robô humanoide UBTech da família Yan (Alpha Mini ou compatível).
+- **Software:** Python 3 com o pacote `YanAPI` (YanSDK da UBTech); além dele, apenas a biblioteca padrão (`time`).
+  - Comando de instalação e versões: **a confirmar** (o repositório não possui arquivo de dependências).
+- **Rede:** execução apontando `ROBOT_IP` para o robô — o padrão do código é `127.0.0.1`; **a confirmar** se o script roda no próprio robô ou em máquina externa.
+
+## Configuração
+
+| Constante | Padrão | Função |
+|---|---|---|
+| `ROBOT_IP` | `"127.0.0.1"` | IP do robô |
+| `VOLUME` | `100` | Volume do alto-falante |
+| `LIMIAR_ROSTOS` | `1` | Mínimo de rostos para disparar o show |
+| `COOLDOWN` | `8.0` s | Intervalo mínimo entre shows |
+| `INTERVALO` | `0.5` s | Pausa do loop de detecção |
+| `MAX_ACENOS` | `0` | 0 = repete indefinidamente |
+| `DEBUG` | `False` | Imprime os retornos crus da API |
+| `TIPO_RECONHECIMENTO` | `"quantity"` | Modo do reconhecimento facial |
+| `RAISE_HAND_STOP` | `True` | Habilita a parada por gesto |
+| `VELOCIDADE_MOVIMENTO` / `VELOCIDADE_HIPHOP` | `"slow"` / `"fast"` | Velocidade das rotinas |
+| `PAUSA_FALA` / `PAUSA_SEQUENCIA` | `0.7` / `0.5` s | Pausas entre falas e movimentos |
+| `REPETIR_HIPHOP` | `1` | Repetições da coreografia |
+| `MUSICA_HIPHOP` | `"hiphop.mp3"` | Música buscada no robô |
+| `DANCA_HIPHOP` / `LETRA_HIPHOP` | listas | Movimentos da coreografia e trechos cantados (fallback) |
+
+O arquivo `hiphop.mp3` precisa estar na lista de músicas do robô (busca por nome, sem extensão e sem diferenciar maiúsculas).
+
+## Execução
+
+```bash
+python <arquivo_principal>.py   # nome do arquivo: a confirmar
 ```
-ENTRADA                    PROCESSAMENTO                     SAÍDA                       ESTADO
------------------------    ------------------------------    ------------------------    ------------------------
-Câmera: rostos          →  contar_rostos_em (parse JSON)  →  show (movimento+voz+LED) →  acenos, ultimo_aceno
-Câmera: gesto "good"    →  regra: limiar + cooldown       →  parada + desculpas          (variáveis do loop)
-Bateria                 →  mao_levantada (busca "good")   →  música ou TTS de fallback
-Lista de músicas        →  sequenciamento do show         →  console (logs)
-Ctrl+C                  →  com_seguranca (erros ocultos)  →  limpeza no finally
+
+1. Ajuste `ROBOT_IP` e ligue o robô (bateria e volume são conferidos no início da execução);
+2. O loop fica em modo de detecção até um rosto aparecer;
+3. Para encerrar: `Ctrl+C` — o robô para a música e o reconhecimento, apaga o LED e retorna à pose inicial;
+4. Em caso de dúvida sobre os retornos da API, ativar `DEBUG = True`.
+
+## Rotina crítica e plano de refatoração
+
+A rotina mais difícil de manter é a **parada de emergência por mão levantada** (gesto `good`, via `sync_do_gesture_recognition()`). Foi o ponto mais trabalhoso do desenvolvimento e concentra a lógica mais frágil do programa.
+
+### O problema: lógica espalhada em 3 pontos
+
+| Local | Contexto | Comportamento atual |
+|---|---|---|
+| `apresentar()`, início | Antes do show começar | Pede desculpas e cancela o show |
+| `apresentar()`, após o aceno | Meio do aceno | Para voz e movimento, pede desculpas |
+| `dancar_hiphop()`, no loop | Antes de cada movimento | Para música, movimento e voz; retorna `"parado"` |
+
+**Por quê é difícil de manter:**
+
+- **Duplicação (*shotgun surgery*):** a condição `RAISE_HAND_STOP and mao_levantada()` e a sequência de paradas (`stop_play_music`, `stop_play_motion`, `stop_voice_tts`) repetem-se com ordens diferentes em cada ponto; qualquer ajuste exige editar 2–3 trechos e retestar o show inteiro no robô.
+- **Parsing frágil e inconsistente:** `mao_levantada()` olha apenas **um nível** do JSON em busca da string `"good"`. Se a API aninhar o resultado do gesto (ex.: `{"data": {"gesture": [{"type": "good"}]}}`), a função devolve `False` — um **falso negativo numa função de segurança**. `contar_rostos_em()` é recursiva exatamente por causa dessa incerteza de formato; a função gêmea não é.
+- **String mágica:** o gesto `"good"` está embutido no corpo da função, sem constante nomeada.
+- **Checagens só entre movimentos:** durante um movimento longo o robô não reage ao gesto.
+
+### Mudança proposta (pequena, preserva o comportamento)
+
+Extrair a condição e a sequência de parada para **um único ponto de verdade**:
+
+```python
+GESTO_PARADA = "good"   # junto das constantes do topo
+
+def pedido_de_parada():
+    """Condicao de parada de emergencia, definida em um unico lugar."""
+    return RAISE_HAND_STOP and mao_levantada()
+
+def parar_show(mensagem):
+    """Para toda a midia em execucao e pede desculpas."""
+    com_seguranca(lambda: YanAPI.stop_play_music())
+    com_seguranca(lambda: YanAPI.stop_play_motion(name=""))
+    com_seguranca(lambda: YanAPI.stop_voice_tts())
+    print(mensagem)
+    pedir_desculpas()
 ```
 
-## 1. Entrada
+Chamadas nos mesmos 3 pontos de hoje:
 
-| # | Fonte | Mecanismo (API / função) | Dado obtido | Onde é consumido |
-|---|---|---|---|---|
-| E1 | Câmera do robô | `YanAPI.sync_do_face_recognition(type="quantity")` | JSON com a quantidade de rostos visíveis | Loop principal em `main()` |
-| E2 | Câmera do robô | `YanAPI.sync_do_gesture_recognition()` | Presença do gesto `"good"` (mão levantada) | `apresentar()` e `dancar_hiphop()` |
-| E3 | Sensor de bateria | `YanAPI.get_robot_battery_value()` | Percentual de bateria | `checar_bateria()` (uma vez, no início) |
-| E4 | Biblioteca de mídia do robô | `YanAPI.get_media_music_list()` | Lista de músicas disponíveis | `tocar_musica()` (verifica se `hiphop.mp3` existe) |
-| E5 | Configuração do programa | Constantes no topo do arquivo (`LIMIAR_ROSTOS`, `COOLDOWN`, velocidades etc.) | Parâmetros de comportamento | Todo o programa |
-| E6 | Usuário no teclado | `KeyboardInterrupt` (`Ctrl+C`) | Comando de encerramento | `main()` (dispara o `finally`) |
+```python
+# apresentar() — no inicio (nada esta tocando ainda)
+if pedido_de_parada():
+    print("Ja comecou com mao levantada! Pedindo desculpas antes de comecar.")
+    pedir_desculpas()
+    return
 
-## 2. Processamento
+# apresentar() — depois do aceno
+if pedido_de_parada():
+    parar_show("Mao levantada no meio do aceno! Parando.")
+    return
 
-| # | Etapa | Função / local | O que faz |
-|---|---|---|---|
-| P1 | Interpretação do retorno da API | `contar_rostos_em()` | Varredura **recursiva e defensiva** do JSON: procura inteiros em chaves com `num`/`count`/`quantity`/`total`, listas em chaves com `face` e dicionários aninhados; devolve o maior total encontrado |
-| P2 | Decisão de disparo do show | `main()` | Dispara o show se `n_rostos >= LIMIAR_ROSTOS` **e** `agora - ultimo_aceno >= COOLDOWN` |
-| P3 | Detecção de gesto | `mao_levantada()` | Percorre os valores do retorno e considera "mão levantada" se algum for a string `"good"` (sem diferenciar maiúsculas) |
-| P4 | Casamento de música | `tocar_musica()` | Compara o nome procurado com os itens da lista (sem extensão, sem diferenciar maiúsculas); se não achar, ativa o **fallback** de cantar via TTS |
-| P5 | Sequenciamento do show | `apresentar()` | Ordem fixa: checar gesto → acenar/falar → checar gesto → agachar/levantar braços → dançar → voltar à pose |
-| P6 | Controle da coreografia | `dancar_hiphop()` | Itera `REPETIR_HIPHOP` × `DANCA_HIPHOP`; **antes de cada movimento** checa `mao_levantada()`; sem música, escolhe o trecho da letra pelo índice (`% len(LETRA_HIPHOP)`) |
-| P7 | Temporização | `time.time()` / `time.sleep()` | Cooldown (8 s), intervalo do loop (0,5 s), pausas de fala (0,7 s) e de sequência (0,5 s) |
-| P8 | Robustez | `com_seguranca()` | Envolve cada chamada de API em `try/except` que **engole a exceção** — o show continua mesmo se uma chamada falhar |
-| P9 | Encerramento limpo | `finally` em `main()` | Para reconhecimento facial, música e TTS; apaga LED; retorna à pose inicial |
+# dancar_hiphop() — antes de cada movimento
+if pedido_de_parada():
+    parar_show("Mao levantada! Parando o show e pedindo desculpas.")
+    return "parado"
+```
 
-## 3. Saída
+E, dentro de `mao_levantada()`, trocar o literal `== "good"` por `== GESTO_PARADA`.
 
-| # | Canal | API | Efeito produzido |
-|---|---|---|---|
-| S1 | Movimento | `sync_play_motion` | Aceno (`wave`), abertura (`crouch`, `raise`), desculpas (`bend`), volta à pose (`reset`) e os 8 movimentos de dança (`rightmovestep`, `H_RBox`, `leftmovestep`, `GangnamStyle`, `H_Wave_R`, `H_Wave_L`, `LittleApple`, `Victory`) |
-| S2 | Voz (TTS) | `start_voice_tts` / `sync_do_tts` | Saudação ("Ola... mestre!"), anúncio do show, trechos da letra (fallback) e pedido de desculpas |
-| S3 | LED do robô | `set_robot_led` | Azul piscando (monitorando) → verde (rosto detectado) → ciano piscando (dançando) → vermelho piscando (desculpas) → azul off (fim) |
-| S4 | Áudio | `start_play_music` / `stop_play_music` | Toca/para `hiphop.mp3` |
-| S5 | Configuração | `set_robot_volume_value` | Fixa o volume em 100 |
-| S6 | Console | `print` | Logs de status: conexão, bateria, música encontrada (ou não), interrupções |
-| S7 | Reconhecimento | `stop_face_recognition` | Encerra a sessão de reconhecimento na saída |
+**O que permanece idêntico:** verificações nos mesmos 3 pontos, mesmas mensagens de console (agora passadas como parâmetro) e mesmo resultado observável — tudo para e o robô pede desculpas.
 
-## 4. Estado
+**Única diferença interna:** a ordem das paradas é unificada numa sequência só; alguns pontos passam a emitir um `stop_play_music` a mais mesmo sem música tocando, e em `apresentar()` movimento/voz são parados na ordem inversa à atual. Como são comandos imediatos de parada e todos passam por `com_seguranca`, o efeito é nulo — nada observável muda.
 
-| # | Estado | Tipo | Onde vive | Papel |
-|---|---|---|---|---|
-| X1 | `acenos` | Variável local (`int`) | `main()` | Contador de shows já executados; com `MAX_ACENOS = 0` o loop é infinito |
-| X2 | `ultimo_aceno` | Variável local (`float`) | `main()` | Timestamp do último show; implementa o cooldown |
-| X3 | `tocando` | Variável local (`bool`) | `dancar_hiphop()` | Indica se a música foi encontrada/tocada (define se usa TTS) |
-| X4 | `"parado"` / `"concluido"` | Valor retornado | `dancar_hiphop()` → `apresentar()` | Sinaliza se o show foi interrompido (pula a volta à pose) |
-| X5 | Constantes de configuração | Globais somente leitura | Topo do arquivo | Definem o comportamento de toda a execução |
-| X6 | Máquina de estados implícita | — | Sequência do show + cores do LED | Monitorando → detectado → dançando → (parado/desculpando) → concluído |
-| X7 | Estado externo do robô | No firmware do robô | Fora do programa | Bateria real, biblioteca de músicas, conectividade de rede, pose atual do robô, sessão de reconhecimento |
+**Ganho para a refatoração:** melhorias futuras da parada (varredura recursiva do JSON como já faz `contar_rostos_em()`, gesto alternativo, checagem durante o movimento) ficam concentradas em **uma função e uma constante**, em vez de três trechos espalhados pelo fluxo do show.
 
-## Observações importantes
+### Validação no robô (a confirmar)
 
-1. **Não há estado persistente.** Nada é gravado em disco ou banco: todo estado morre quando o programa termina (contador de acenos volta a zero a cada execução).
-2. **O LED funciona como indicador visual do estado** — as cores coincidem com a máquina de estados implícita (X6), o que facilita demonstração e depuração.
-3. **O reconhecimento facial nunca é iniciado explicitamente** — o código chama `sync_do_face_recognition` diretamente e só chama `stop_face_recognition` no `finally` (defensivo). O ciclo de vida da sessão é gerenciado pela própria API **[a confirmar]**.
-4. **Estado pode ficar inconsistente em silêncio.** Como `com_seguranca()` engole exceções, `tocar_musica()` pode retornar `True` mesmo se `start_play_music` falhar — nesse caso o robô "dança sem música" e sem cantar **[a confirmar]**.
-5. **Estado externo (X7) não é controlado pelo programa**: se a música não estiver no robô ou a bateria acabar no meio do show, o comportamento depende apenas dos mecanismos defensivos do código.
+- [ ] Confirmar com `DEBUG = True` o formato real do retorno de `sync_do_gesture_recognition` (nível de aninhamento e nome exato do campo do gesto).
+- [ ] Testar os 3 pontos de disparo: mão levantada antes de começar, durante o aceno e no meio da dança.
+- [ ] Confirmar que `stop_play_motion(name="")` interrompe o movimento corrente no firmware usado — se não interromper, a parada só vale entre movimentos.
+
+## Limitações e pontos a confirmar
+
+- **Formato das respostas da API:** a contagem de rostos e a detecção do gesto interpretam o JSON de forma genérica; validar com o retorno real do robô (`DEBUG = True`). Ver também a seção **Rotina crítica e plano de refatoração**.
+- **Catálogo de movimentos:** nomes como `GangnamStyle`, `LittleApple` e `H_RBox` dependem do firmware do robô; se algum não existir, a chamada é ignorada e o show continua.
+- **Tolerância a falhas:** erros durante o loop são silenciados (`com_seguranca`); não há reconexão automática nem registro de log.
+- **TTS:** as falas usam `interrupt=False` com pausas fixas — podem se sobrepor em redes lentas. A fala de abertura inclui linguagem forte; ajustar conforme o contexto de apresentação.
+- **Dependências e nome do script:** sem `requirements.txt`; nome do arquivo principal e modelo exato do robô **a confirmar**.
