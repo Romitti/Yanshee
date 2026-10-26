@@ -1,3 +1,5 @@
+#PROJETO YANSHE BRUNCOLAS 26/10/26
+
 import time
 
 import YanAPI
