@@ -2,7 +2,6 @@ ROBO UBITECH yanshee com 1 GB de memória RAM
 Data: 26/10/2026
 Mantém o robô humanoide UBTech (via API YanSDK / YanAPI) monitorando o ambiente com reconhecimento facial. Ao detectar ao menos um rosto, executa um pequeno show de boas-vindas:
 
-reconhecimento facial - após reconhecer uma face humana o robo inicia as proximas ações;
 Aceno e saudação — movimento wave com fala de saudação (TTS);
 Abertura — agacha, levanta os braços e anuncia o show;
 Dança hip-hop — sequência de movimentos do catálogo do robô ao som de hiphop.mp3; se a música não for encontrada no robô, ele canta trechos via TTS;
